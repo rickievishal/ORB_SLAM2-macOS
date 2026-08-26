@@ -22,9 +22,11 @@
 #ifndef SYSTEM_H
 #define SYSTEM_H
 
-#include<string>
-#include<thread>
-#include<opencv2/core/core.hpp>
+#include <string>
+#include <thread>
+#include <vector>
+#include <mutex>
+#include <opencv2/core/core.hpp>
 
 #include "Tracking.h"
 #include "FrameDrawer.h"
@@ -45,6 +47,7 @@ class Map;
 class Tracking;
 class LocalMapping;
 class LoopClosing;
+class MapPoint;
 
 class System
 {
@@ -76,7 +79,7 @@ public:
     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.
     // Returns the camera pose (empty if tracking fails).
     cv::Mat TrackMonocular(const cv::Mat &im, const double &timestamp);
-
+    void RunViewer();
     // This stops local mapping thread (map building) and performs only camera tracking.
     void ActivateLocalizationMode();
     // This resumes local mapping thread and performs SLAM again.
@@ -93,7 +96,6 @@ public:
     // It waits until all threads have finished.
     // This function must be called before saving the trajectory.
     void Shutdown();
-
     // Save camera trajectory in the TUM RGB-D dataset format.
     // Only for stereo and RGB-D. This method does not work for monocular.
     // Call first Shutdown()
@@ -176,6 +178,6 @@ private:
     std::mutex mMutexState;
 };
 
-}// namespace ORB_SLAM
+}// namespace ORB_SLAM2
 
 #endif // SYSTEM_H

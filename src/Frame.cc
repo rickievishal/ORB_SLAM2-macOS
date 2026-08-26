@@ -21,6 +21,7 @@
 #include "Frame.h"
 #include "Converter.h"
 #include "ORBmatcher.h"
+#include <opencv2/calib3d.hpp>
 #include <thread>
 
 namespace ORB_SLAM2

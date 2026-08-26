@@ -1,28 +1,19 @@
 /**
 * This file is part of ORB-SLAM2.
 *
-* Copyright (C) 2014-2016 Raúl Mur-Artal <raulmur at unizar dot es> (University of Zaragoza)
-* For more information see <https://github.com/raulmur/ORB_SLAM2>
+* Copyright (C) 2014-2016 Raúl Mur-Artal
 *
 * ORB-SLAM2 is free software: you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* ORB-SLAM2 is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with ORB-SLAM2. If not, see <http://www.gnu.org/licenses/>.
+* the Free Software Foundation.
 */
-
 
 #include<iostream>
 #include<algorithm>
 #include<fstream>
 #include<chrono>
+#include<unistd.h>
+#include<thread>
 
 #include<opencv2/core/core.hpp>
 
@@ -30,125 +21,348 @@
 
 using namespace std;
 
-void LoadImages(const string &strFile, vector<string> &vstrImageFilenames,
-                vector<double> &vTimestamps);
+
+// ------------------------------------------------------------
+// Function declarations
+// ------------------------------------------------------------
+
+void LoadImages(
+    const string &strFile,
+    vector<string> &vstrImageFilenames,
+    vector<double> &vTimestamps
+);
+
+void ProcessImages(
+    ORB_SLAM2::System* pSLAM,
+    const string& sequencePath,
+    const vector<string>& vstrImageFilenames,
+    const vector<double>& vTimestamps
+);
+
+
+// ------------------------------------------------------------
+// Main
+// ------------------------------------------------------------
 
 int main(int argc, char **argv)
 {
     if(argc != 4)
     {
-        cerr << endl << "Usage: ./mono_tum path_to_vocabulary path_to_settings path_to_sequence" << endl;
+        cerr << endl
+             << "Usage: ./mono_tum "
+                "path_to_vocabulary "
+                "path_to_settings "
+                "path_to_sequence"
+             << endl;
+
         return 1;
     }
 
+
+    // --------------------------------------------------------
     // Retrieve paths to images
+    // --------------------------------------------------------
+
     vector<string> vstrImageFilenames;
     vector<double> vTimestamps;
-    string strFile = string(argv[3])+"/rgb.txt";
-    LoadImages(strFile, vstrImageFilenames, vTimestamps);
+
+    string strFile = string(argv[3]) + "/rgb.txt";
+
+    LoadImages(
+        strFile,
+        vstrImageFilenames,
+        vTimestamps
+    );
 
     int nImages = vstrImageFilenames.size();
 
-    // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
 
-    // Vector for tracking time statistics
-    vector<float> vTimesTrack;
-    vTimesTrack.resize(nImages);
+    // --------------------------------------------------------
+    // Create SLAM system
+    //
+    // IMPORTANT:
+    //
+    // false means DO NOT create the Viewer thread.
+    //
+    // On macOS, Pangolin/AppKit must run on the MAIN thread.
+    // We therefore start the viewer explicitly below.
+    // --------------------------------------------------------
 
-    cout << endl << "-------" << endl;
-    cout << "Start processing sequence ..." << endl;
-    cout << "Images in the sequence: " << nImages << endl << endl;
+    ORB_SLAM2::System SLAM(
+        argv[1],
+        argv[2],
+        ORB_SLAM2::System::MONOCULAR,
+        true
+    );
 
-    // Main loop
-    cv::Mat im;
-    for(int ni=0; ni<nImages; ni++)
-    {
-        // Read image from file
-        im = cv::imread(string(argv[3])+"/"+vstrImageFilenames[ni],CV_LOAD_IMAGE_UNCHANGED);
-        double tframe = vTimestamps[ni];
 
-        if(im.empty())
-        {
-            cerr << endl << "Failed to load image at: "
-                 << string(argv[3]) << "/" << vstrImageFilenames[ni] << endl;
-            return 1;
-        }
+    // --------------------------------------------------------
+    // Start image processing in a worker thread
+    // --------------------------------------------------------
 
-#ifdef COMPILEDWITHC11
-        std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
-#else
-        std::chrono::monotonic_clock::time_point t1 = std::chrono::monotonic_clock::now();
-#endif
+    std::thread trackingThread(
+        ProcessImages,
+        &SLAM,
+        string(argv[3]),
+        std::cref(vstrImageFilenames),
+        std::cref(vTimestamps)
+    );
 
-        // Pass the image to the SLAM system
-        SLAM.TrackMonocular(im,tframe);
 
-#ifdef COMPILEDWITHC11
-        std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
-#else
-        std::chrono::monotonic_clock::time_point t2 = std::chrono::monotonic_clock::now();
-#endif
+    // --------------------------------------------------------
+    // IMPORTANT:
+    //
+    // Pangolin MUST run on the macOS MAIN THREAD.
+    //
+    // This is what prevents:
+    //
+    // "nextEventMatchingMask should only be called
+    //  from the Main Thread!"
+    //
+    // --------------------------------------------------------
 
-        double ttrack= std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
+    SLAM.RunViewer();
 
-        vTimesTrack[ni]=ttrack;
 
-        // Wait to load the next frame
-        double T=0;
-        if(ni<nImages-1)
-            T = vTimestamps[ni+1]-tframe;
-        else if(ni>0)
-            T = tframe-vTimestamps[ni-1];
+    // --------------------------------------------------------
+    // Wait for image-processing thread to finish
+    // --------------------------------------------------------
 
-        if(ttrack<T)
-            usleep((T-ttrack)*1e6);
-    }
+    if(trackingThread.joinable())
+        trackingThread.join();
 
-    // Stop all threads
+
+    // --------------------------------------------------------
+    // Stop all SLAM threads
+    // --------------------------------------------------------
+
     SLAM.Shutdown();
 
-    // Tracking time statistics
-    sort(vTimesTrack.begin(),vTimesTrack.end());
-    float totaltime = 0;
-    for(int ni=0; ni<nImages; ni++)
-    {
-        totaltime+=vTimesTrack[ni];
-    }
-    cout << "-------" << endl << endl;
-    cout << "median tracking time: " << vTimesTrack[nImages/2] << endl;
-    cout << "mean tracking time: " << totaltime/nImages << endl;
-
-    // Save camera trajectory
-    SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory.txt");
 
     return 0;
 }
 
-void LoadImages(const string &strFile, vector<string> &vstrImageFilenames, vector<double> &vTimestamps)
+
+// ------------------------------------------------------------
+// Process TUM images
+// ------------------------------------------------------------
+
+void ProcessImages(
+    ORB_SLAM2::System* pSLAM,
+    const string& sequencePath,
+    const vector<string>& vstrImageFilenames,
+    const vector<double>& vTimestamps)
+{
+    int nImages = vstrImageFilenames.size();
+
+    vector<float> vTimesTrack(nImages);
+
+
+    cout << endl << "-------" << endl;
+    cout << "Start processing sequence ..." << endl;
+    cout << "Images in the sequence: "
+         << nImages
+         << endl << endl;
+
+
+    // --------------------------------------------------------
+    // Main tracking loop
+    // --------------------------------------------------------
+
+    cv::Mat im;
+
+    for(int ni = 0; ni < nImages; ni++)
+    {
+        // ----------------------------------------------------
+        // Read image
+        // ----------------------------------------------------
+
+        im = cv::imread(
+            sequencePath + "/" + vstrImageFilenames[ni],
+            cv::IMREAD_UNCHANGED
+        );
+
+        double tframe = vTimestamps[ni];
+
+
+        // ----------------------------------------------------
+        // Check image
+        // ----------------------------------------------------
+
+        if(im.empty())
+        {
+            cerr << endl
+                 << "Failed to load image at: "
+                 << sequencePath << "/"
+                 << vstrImageFilenames[ni]
+                 << endl;
+
+            return;
+        }
+
+
+        // ----------------------------------------------------
+        // Start timing
+        // ----------------------------------------------------
+
+        auto t1 = std::chrono::steady_clock::now();
+
+
+        // ----------------------------------------------------
+        // Pass image to ORB-SLAM2
+        // ----------------------------------------------------
+
+        pSLAM->TrackMonocular(
+            im,
+            tframe
+        );
+
+
+        // ----------------------------------------------------
+        // End timing
+        // ----------------------------------------------------
+
+        auto t2 = std::chrono::steady_clock::now();
+
+
+        double ttrack =
+            std::chrono::duration_cast<
+                std::chrono::duration<double>
+            >(t2 - t1).count();
+
+
+        vTimesTrack[ni] = ttrack;
+
+
+        // ----------------------------------------------------
+        // Match the original TUM playback rate
+        // ----------------------------------------------------
+
+        double T = 0;
+
+        if(ni < nImages - 1)
+        {
+            T = vTimestamps[ni + 1] - tframe;
+        }
+        else if(ni > 0)
+        {
+            T = tframe - vTimestamps[ni - 1];
+        }
+
+
+        if(ttrack < T)
+        {
+            usleep(
+                static_cast<useconds_t>(
+                    (T - ttrack) * 1e6
+                )
+            );
+        }
+    }
+
+
+    cout << endl;
+    cout << "Image processing finished."
+         << endl;
+
+
+    // --------------------------------------------------------
+    // Tracking statistics
+    // --------------------------------------------------------
+
+    sort(
+        vTimesTrack.begin(),
+        vTimesTrack.end()
+    );
+
+
+    float totaltime = 0;
+
+    for(int ni = 0; ni < nImages; ni++)
+    {
+        totaltime += vTimesTrack[ni];
+    }
+
+
+    cout << "-------" << endl << endl;
+
+    cout << "median tracking time: "
+         << vTimesTrack[nImages / 2]
+         << endl;
+
+    cout << "mean tracking time: "
+         << totaltime / nImages
+         << endl;
+
+
+    // --------------------------------------------------------
+    // Save trajectory
+    // --------------------------------------------------------
+
+    pSLAM->SaveKeyFrameTrajectoryTUM(
+        "KeyFrameTrajectory.txt"
+    );
+}
+
+
+// ------------------------------------------------------------
+// Load TUM image timestamps and filenames
+// ------------------------------------------------------------
+
+void LoadImages(
+    const string &strFile,
+    vector<string> &vstrImageFilenames,
+    vector<double> &vTimestamps)
 {
     ifstream f;
+
     f.open(strFile.c_str());
 
-    // skip first three lines
+
+    if(!f.is_open())
+    {
+        cerr << "Failed to open image list: "
+             << strFile
+             << endl;
+
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // Skip first three header lines
+    // --------------------------------------------------------
+
     string s0;
-    getline(f,s0);
-    getline(f,s0);
-    getline(f,s0);
+
+    getline(f, s0);
+    getline(f, s0);
+    getline(f, s0);
+
+
+    // --------------------------------------------------------
+    // Read timestamp + image filename
+    // --------------------------------------------------------
 
     while(!f.eof())
     {
         string s;
-        getline(f,s);
+
+        getline(f, s);
+
         if(!s.empty())
         {
             stringstream ss;
+
             ss << s;
+
             double t;
             string sRGB;
+
             ss >> t;
-            vTimestamps.push_back(t);
             ss >> sRGB;
+
+            vTimestamps.push_back(t);
             vstrImageFilenames.push_back(sRGB);
         }
     }

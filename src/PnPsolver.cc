@@ -54,14 +54,111 @@
 
 #include <vector>
 #include <cmath>
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include "Thirdparty/DBoW2/DUtils/Random.h"
 #include <algorithm>
+#include <cstring>
 
 using namespace std;
 
 namespace ORB_SLAM2
 {
+
+static const int CV_SVD_MODIFY_A = 1;
+static const int CV_SVD_U_T = 2;
+static const int CV_SVD = 1;
+
+CvMat::CvMat(int rows_, int cols_, int type_) : rows(rows_), cols(cols_), type(type_), owns_data(true)
+{
+  data.db = new double[rows * cols]();
+}
+
+CvMat::CvMat(int rows_, int cols_, int type_, double *data_) : rows(rows_), cols(cols_), type(type_), owns_data(false)
+{
+  data.db = data_;
+}
+
+CvMat::~CvMat()
+{
+  if(owns_data)
+    delete[] data.db;
+}
+
+static CvMat cvMat(int rows, int cols, int type, double *data)
+{
+  return CvMat(rows, cols, type, data);
+}
+
+static CvMat *cvCreateMat(int rows, int cols, int type)
+{
+  return new CvMat(rows, cols, type);
+}
+
+static void cvReleaseMat(CvMat **mat)
+{
+  delete *mat;
+  *mat = NULL;
+}
+
+static void cvSetZero(CvMat *mat)
+{
+  std::fill(mat->data.db, mat->data.db + mat->rows * mat->cols, 0.0);
+}
+
+static double cvmGet(const CvMat *mat, int row, int col)
+{
+  return mat->data.db[row * mat->cols + col];
+}
+
+static void cvmSet(CvMat *mat, int row, int col, double value)
+{
+  mat->data.db[row * mat->cols + col] = value;
+}
+
+static cv::Mat asCvMat(const CvMat *mat)
+{
+  return cv::Mat(mat->rows, mat->cols, CV_64F, mat->data.db);
+}
+
+static void cvMulTransposed(const CvMat *src, CvMat *dst, int order)
+{
+  cv::Mat src_mat = asCvMat(src);
+  cv::Mat dst_mat = asCvMat(dst);
+  if(order)
+    dst_mat = src_mat.t() * src_mat;
+  else
+    dst_mat = src_mat * src_mat.t();
+}
+
+static void cvSVD(CvMat *src, CvMat *w, CvMat *u, CvMat *v, int flags)
+{
+  cv::Mat src_mat = asCvMat(src);
+  cv::Mat singular_values, u_mat, vt_mat;
+  cv::SVD::compute(src_mat, singular_values, u_mat, vt_mat, cv::SVD::FULL_UV);
+
+  if(w)
+    singular_values.copyTo(asCvMat(w));
+  if(u)
+  {
+    cv::Mat u_out = asCvMat(u);
+    if(flags & CV_SVD_U_T)
+      cv::Mat(u_mat.t()).copyTo(u_out);
+    else
+      u_mat.copyTo(u_out);
+  }
+  if(v)
+    cv::Mat(vt_mat.t()).copyTo(asCvMat(v));
+}
+
+static void cvInvert(CvMat *src, CvMat *dst, int)
+{
+  cv::invert(asCvMat(src), asCvMat(dst), cv::DECOMP_SVD);
+}
+
+static void cvSolve(CvMat *src, const CvMat *rhs, CvMat *dst, int)
+{
+  cv::solve(asCvMat(src), asCvMat(rhs), asCvMat(dst), cv::DECOMP_SVD);
+}
 
 
 PnPsolver::PnPsolver(const Frame &F, const vector<MapPoint*> &vpMapPointMatches):

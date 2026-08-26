@@ -23,7 +23,7 @@
 #define VIEWERAR_H
 
 #include <mutex>
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include <pangolin/pangolin.h>
 #include <string>
 #include"../../../include/System.h"

@@ -22,10 +22,11 @@
 
 #include "System.h"
 #include "Converter.h"
-#include <thread>
+
 #include <pangolin/pangolin.h>
 #include <iomanip>
-
+#include <unistd.h>
+#include <thread>
 namespace ORB_SLAM2
 {
 
@@ -97,8 +98,10 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //Initialize the Viewer thread and launch
     if(bUseViewer)
     {
-        mpViewer = new Viewer(this, mpFrameDrawer,mpMapDrawer,mpTracker,strSettingsFile);
-        mptViewer = new thread(&Viewer::Run, mpViewer);
+       mpViewer = new Viewer(this, mpFrameDrawer,mpMapDrawer,mpTracker,strSettingsFile);
+
+        // On macOS, Pangolin/AppKit must run on the main thread.
+        mptViewer = nullptr;
         mpTracker->SetViewer(mpViewer);
     }
 
@@ -302,23 +305,31 @@ void System::Shutdown()
 {
     mpLocalMapper->RequestFinish();
     mpLoopCloser->RequestFinish();
+
     if(mpViewer)
     {
         mpViewer->RequestFinish();
-        while(!mpViewer->isFinished())
-            usleep(5000);
     }
 
-    // Wait until all thread have effectively stopped
-    while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
+    // Wait until all threads have effectively stopped
+    while(!mpLocalMapper->isFinished() ||
+          !mpLoopCloser->isFinished() ||
+          mpLoopCloser->isRunningGBA())
     {
         usleep(5000);
     }
 
     if(mpViewer)
-        pangolin::BindToContext("ORB-SLAM2: Map Viewer");
+    {
+        while(!mpViewer->isFinished())
+            usleep(5000);
+    }
 }
-
+void System::RunViewer()
+{
+    if(mpViewer)
+        mpViewer->Run();
+}
 void System::SaveTrajectoryTUM(const string &filename)
 {
     cout << endl << "Saving camera trajectory to " << filename << " ..." << endl;

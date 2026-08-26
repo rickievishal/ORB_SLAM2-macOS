@@ -51,12 +51,29 @@
 #ifndef PNPSOLVER_H
 #define PNPSOLVER_H
 
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include "MapPoint.h"
 #include "Frame.h"
 
 namespace ORB_SLAM2
 {
+
+struct CvMat
+{
+  CvMat(int rows_, int cols_, int type_);
+  CvMat(int rows_, int cols_, int type_, double *data_);
+  ~CvMat();
+
+  int rows;
+  int cols;
+  int type;
+  union
+  {
+    double *db;
+    unsigned char *ptr;
+  } data;
+  bool owns_data;
+};
 
 class PnPsolver {
  public:

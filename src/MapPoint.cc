@@ -332,41 +332,75 @@ void MapPoint::UpdateNormalAndDepth()
     map<KeyFrame*,size_t> observations;
     KeyFrame* pRefKF;
     cv::Mat Pos;
+
     {
         unique_lock<mutex> lock1(mMutexFeatures);
         unique_lock<mutex> lock2(mMutexPos);
+
         if(mbBad)
             return;
-        observations=mObservations;
-        pRefKF=mpRefKF;
+
+        observations = mObservations;
+        pRefKF = mpRefKF;
         Pos = mWorldPos.clone();
     }
 
-    if(observations.empty())
+    if(observations.empty() || pRefKF == nullptr)
         return;
 
-    cv::Mat normal = cv::Mat::zeros(3,1,CV_32F);
-    int n=0;
-    for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
+    // Make sure the world position is a 3x1 float matrix.
+    Pos = Pos.reshape(1, 3);
+    Pos.convertTo(Pos, CV_32F);
+
+    cv::Mat normal = cv::Mat::zeros(3, 1, CV_32F);
+    int n = 0;
+
+    for(map<KeyFrame*,size_t>::iterator mit = observations.begin(),
+        mend = observations.end(); mit != mend; ++mit)
     {
         KeyFrame* pKF = mit->first;
+
         cv::Mat Owi = pKF->GetCameraCenter();
-        cv::Mat normali = mWorldPos - Owi;
-        normal = normal + normali/cv::norm(normali);
-        n++;
+
+        // Normalize camera center to 3x1 CV_32F.
+        Owi = Owi.reshape(1, 3);
+        Owi.convertTo(Owi, CV_32F);
+
+        cv::Mat normali = Pos - Owi;
+
+        float norm = cv::norm(normali);
+
+        if(norm > 1e-6f)
+        {
+            normal += normali / norm;
+            n++;
+        }
     }
 
+    if(n == 0)
+        return;
+
     cv::Mat PC = Pos - pRefKF->GetCameraCenter();
-    const float dist = cv::norm(PC);
+    PC = PC.reshape(1, 3);
+
+    cv::Mat PCFloat;
+    PC.convertTo(PCFloat, CV_32F);
+
+    const float dist = cv::norm(PCFloat);
+
+    if(dist <= 1e-6f)
+        return;
+
     const int level = pRefKF->mvKeysUn[observations[pRefKF]].octave;
-    const float levelScaleFactor =  pRefKF->mvScaleFactors[level];
+    const float levelScaleFactor = pRefKF->mvScaleFactors[level];
     const int nLevels = pRefKF->mnScaleLevels;
 
     {
         unique_lock<mutex> lock3(mMutexPos);
-        mfMaxDistance = dist*levelScaleFactor;
-        mfMinDistance = mfMaxDistance/pRefKF->mvScaleFactors[nLevels-1];
-        mNormalVector = normal/n;
+
+        mfMaxDistance = dist * levelScaleFactor;
+        mfMinDistance = mfMaxDistance / pRefKF->mvScaleFactors[nLevels-1];
+        mNormalVector = normal / static_cast<float>(n);
     }
 }
 

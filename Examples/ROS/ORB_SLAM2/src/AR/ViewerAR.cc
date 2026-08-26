@@ -20,7 +20,7 @@
 
 #include "ViewerAR.h"
 
-#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/highgui.hpp>
 
 #include <mutex>
 #include <thread>
